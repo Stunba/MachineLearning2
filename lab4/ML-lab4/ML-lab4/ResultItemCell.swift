@@ -12,6 +12,8 @@ final class ResultItemCell: UICollectionViewCell {
     @IBOutlet weak var imageView: UIImageView!
     @IBOutlet weak var predictionLabel: UILabel!
 
+    var deleteClosure: (() -> Void)?
+
     override func awakeFromNib() {
         super.awakeFromNib()
         // Initialization code
@@ -21,7 +23,13 @@ final class ResultItemCell: UICollectionViewCell {
         didSet {
             guard let item = item else { return }
             imageView.image = item.image
-            predictionLabel.text = "\(item.result)"
+            predictionLabel.text = "Prediction: \(item.result)"
         }
+    }
+}
+
+extension ResultItemCell {
+    override func delete(_ sender: Any?) {
+        deleteClosure?()
     }
 }

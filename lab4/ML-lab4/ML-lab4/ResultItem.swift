@@ -8,9 +8,13 @@
 
 import UIKit
 
-struct StoredResultItem: Codable {
-    let imageURL: URL
+struct StoredResultItem: Codable, Identifiable {
+    let id: String
     let prediction: SVHNModel.Prediction
+}
+
+extension StoredResultItem {
+    var imageURL: URL { URL.documentsDirectory.appendingPathComponent("\(id).png") }
 }
 
 struct StoredPredicitonResults: Codable {

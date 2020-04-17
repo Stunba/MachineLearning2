@@ -10,8 +10,121 @@ import UIKit
 
 private let reuseIdentifier = "ResultItemCell"
 
+public extension URL {
+    static var documentsDirectory: URL {
+        let path = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true).first!
+        return URL(fileURLWithPath: path)
+    }
+}
+
+extension StoredPredicitonResults {
+    var presentableItems: [PresentableResultItem] {
+        results.compactMap { item in
+            do {
+                print(try FileManager.default.contentsOfDirectory(atPath: URL.documentsDirectory.path))
+                let data = try Data(contentsOf: item.imageURL)
+                guard let image = UIImage(data: data) else {
+                    return nil
+                }
+                return PresentableResultItem(image: image, result: item.prediction.value)
+            } catch {
+                print(error)
+                return nil
+            }
+        }
+    }
+}
+
 final class PredictionResultItemsProvider {
-    func loadItems(model: SVHNModel, then completion: ([PresentableResultItem]) -> Void) {
+    private let queue = DispatchQueue(label: "com.ml.lab4.data")
+    private var items: StoredPredicitonResults?
+
+    private var storeFileURL: URL {
+        let url = URL.documentsDirectory.appendingPathComponent("data.json")
+        if !FileManager.default.fileExists(atPath: url.path) {
+            FileManager.default.createFile(atPath: url.path, contents: nil, attributes: [FileAttributeKey.protectionKey: FileProtectionType.none])
+        }
+        return url
+    }
+
+    func store(results: StoredPredicitonResults) {
+        let jsonEncoder = JSONEncoder()
+        do {
+            let data = try jsonEncoder.encode(results)
+            try data.write(to: storeFileURL)
+        } catch {
+            print(error)
+        }
+    }
+
+    func load() -> StoredPredicitonResults {
+        do {
+            let data = try Data(contentsOf: storeFileURL)
+
+            let jsonDecoder = JSONDecoder()
+            let results = try jsonDecoder.decode(StoredPredicitonResults.self, from: data)
+            items = results
+            return results
+        } catch {
+            print(error)
+            return StoredPredicitonResults(results: [])
+        }
+    }
+
+    func loadItems(then completion: @escaping ([PresentableResultItem]) -> Void) {
+        queue.async { [weak self] in
+            guard let slf = self else { return completion([]) }
+
+            let stored: StoredPredicitonResults
+            if let items = slf.items {
+                stored = items
+            } else {
+                stored = slf.load()
+            }
+
+            return completion(stored.presentableItems)
+        }
+    }
+
+    func save(image: UIImage, prediction: SVHNModel.Prediction, then completion: @escaping ([PresentableResultItem]) -> Void) {
+        queue.async { [weak self] in
+            guard let imageData = image.pngData() else { return }
+
+            let id = UUID().uuidString
+            let url = URL.documentsDirectory.appendingPathComponent("\(id).png")
+            do {
+                try imageData.write(to: url, options: [.atomic, .noFileProtection])
+                let item = StoredResultItem(id: id, prediction: prediction)
+                let new = StoredPredicitonResults(results: (self?.items?.results ?? []) + [item])
+                self?.store(results: new)
+                self?.items = new
+                completion(new.presentableItems)
+            } catch {
+                print(error)
+                completion(self?.items?.presentableItems ?? [])
+            }
+        }
+    }
+
+    func delete(at index: Int, then completion: @escaping ([PresentableResultItem]) -> Void) {
+        queue.async { [weak self] in
+            guard let slf = self, var items = slf.items?.results else { return completion([]) }
+
+            do {
+                let item = items.remove(at: index)
+                try FileManager.default.removeItem(at: item.imageURL)
+                let new = StoredPredicitonResults(results: items)
+                slf.store(results: new)
+                slf.items = new
+                completion(new.presentableItems)
+            } catch {
+                print(error)
+                completion(slf.items?.presentableItems ?? [])
+            }
+        }
+    }
+
+    func loadTestItems(model: SVHNModel, then completion: ([PresentableResultItem]) -> Void) {
         let images = [UIImage(named: "test-75")?.resizedImage(for: CGSize(width: 54, height: 54)),
                       UIImage(named: "test-190")?.cropping(to: CGSize(width: 54, height: 54))].compactMap { $0 }
 
@@ -66,25 +179,23 @@ final class PredictionsResultCollectionViewController: UICollectionViewControlle
     }
 
     private func loadData() {
-        queue.async { [weak self, itemsProvider] in
-            guard let model = self?.model else { return }
-            itemsProvider.loadItems(model: model) { items in
-                DispatchQueue.main.async {
-                    self?.items = items
-                }
+        itemsProvider.loadItems() { [weak self] items in
+            DispatchQueue.main.async {
+                self?.items = items
             }
         }
     }
 
     private static func createLayout() -> UICollectionViewLayout {
-        let itemSize = NSCollectionLayoutSize(widthDimension: .fractionalWidth(1.0),
+        let itemSize = NSCollectionLayoutSize(widthDimension: .fractionalWidth(0.48),
                                               heightDimension: .estimated(100))
         let item = NSCollectionLayoutItem(layoutSize: itemSize)
 
         let groupSize = NSCollectionLayoutSize(widthDimension: .fractionalWidth(1.0),
                                                heightDimension: .estimated(100))
         let group = NSCollectionLayoutGroup.horizontal(layoutSize: groupSize,
-                                                       subitems: [item])
+                                                       subitems: [item, item])
+        group.interItemSpacing = .flexible(8)
 
         let section = NSCollectionLayoutSection(group: group)
         section.interGroupSpacing = 8
@@ -105,6 +216,13 @@ final class PredictionsResultCollectionViewController: UICollectionViewControlle
 
             // Populate the cell with our item description.
             cell.item = item
+            cell.deleteClosure = { [weak self] in
+                self?.itemsProvider.delete(at: indexPath.item, then: { items in
+                    DispatchQueue.main.async {
+                        self?.items = items
+                    }
+                })
+            }
 
             // Return the cell.
             return cell
@@ -138,21 +256,20 @@ final class PredictionsResultCollectionViewController: UICollectionViewControlle
      }
      */
 
-    /*
+
      // Uncomment these methods to specify if an action menu should be displayed for the specified item, and react to actions performed on the item
      override func collectionView(_ collectionView: UICollectionView, shouldShowMenuForItemAt indexPath: IndexPath) -> Bool {
-     return false
+        return true
      }
 
      override func collectionView(_ collectionView: UICollectionView, canPerformAction action: Selector, forItemAt indexPath: IndexPath, withSender sender: Any?) -> Bool {
-     return false
+        return action == #selector(UIResponderStandardEditActions.delete(_:))
+        return true
      }
 
      override func collectionView(_ collectionView: UICollectionView, performAction action: Selector, forItemAt indexPath: IndexPath, withSender sender: Any?) {
-
+        guard action == #selector(UIResponderStandardEditActions.delete(_:)) else { return }
      }
-     */
-
 }
 
 extension PredictionsResultCollectionViewController: UIImagePickerControllerDelegate, UINavigationControllerDelegate {
@@ -166,6 +283,8 @@ extension PredictionsResultCollectionViewController: UIImagePickerControllerDele
             DispatchQueue.main.async {
                 self?.items.append(PresentableResultItem(image: image, result: res.value))
             }
+
+            self?.itemsProvider.save(image: image, prediction: res, then: {_ in })
         }
         dismiss(animated: true)
     }

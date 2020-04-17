@@ -39,9 +39,15 @@ extension SVHNModel {
     }
 
     func predict(image: UIImage) -> Prediction? {
-        guard let input = image.resizedImage(for: CGSize(width: 54, height: 54))?.pixelData()?.channelBasedOrder().normalized() else {
-            return nil
+        guard let input = image
+            .resizedImage(for: CGSize(width: 54, height: 54))?
+            .pixelData()?
+            .channelBasedOrder()
+            .normalized() else {
+
+                return nil
         }
+
         return predict(input: input)
     }
 
